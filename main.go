@@ -15,6 +15,8 @@ import (
 	"github.com/google/generative-ai-go/genai"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
+
+	"gemini-repl/themes"
 )
 
 // AppState holds the persistent configuration for our session
@@ -37,15 +39,18 @@ func main() {
 
 	for {
 		fmt.Print("\033[36m> \033[0m")
+
 		input, _ := reader.ReadString('\n')
 		input = strings.TrimSpace(input)
 
 		if input == "" {
 			continue
 		}
+
 		if handleCommands(input, state) {
 			continue
 		}
+
 		if input == "exit" || input == "quit" {
 			break
 		}
@@ -66,17 +71,21 @@ func initAppState(ctx context.Context) *AppState {
 		log.Fatal(err)
 	}
 
-	// Use the latest 2026 standard model
-	modelName := "gemini-3-flash-preview"
-	model := client.GenerativeModel(modelName)
+	renderer, err := glamour.NewTermRenderer(
+		glamour.WithStylesFromJSONBytes(themes.Kanagawa),
+		glamour.WithWordWrap(120),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	var (
+		modelName = "gemini-3-flash-preview"
+		model     = client.GenerativeModel(modelName)
+	)
 	model.SystemInstruction = &genai.Content{
 		Parts: []genai.Part{genai.Text("You are a concise, senior go developer. Give direct answers. Use Markdown for all code.")},
 	}
-
-	renderer, _ := glamour.NewTermRenderer(
-		glamour.WithStandardStyle("notty"),
-		glamour.WithWordWrap(100),
-	)
 
 	return &AppState{
 		client:           client,
@@ -153,6 +162,7 @@ func processChat(ctx context.Context, input string, state *AppState) {
 	fmt.Print(out)
 }
 
+// showLoadingIndicator displays a simple animated "thinking" message while waiting for the model's response
 func showLoadingIndicator(modelName string, stop chan bool) {
 	dots := []string{".  ", ".. ", "..."}
 	i := 0
@@ -169,6 +179,7 @@ func showLoadingIndicator(modelName string, stop chan bool) {
 	}
 }
 
+// extractLastCode uses a regex to find the last Markdown code block in the response and saves it to state for copying
 func extractLastCode(text string, state *AppState) {
 	re := regexp.MustCompile("(?s)```(?:[a-z]+)?\n(.*?)\n```")
 	matches := re.FindStringSubmatch(text)
