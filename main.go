@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/atotto/clipboard"
@@ -29,10 +31,16 @@ type AppState struct {
 	renderer         *glamour.TermRenderer
 }
 
+// Global flag to prevent signal handler from firing during initial startup
+var isReady bool
+
 func main() {
 	ctx := context.Background()
 	state := initAppState(ctx)
 	defer state.client.Close()
+
+	// Pass state to signal handling so it can re-print the specific prompt
+	setupSignalHandling(state)
 
 	if len(os.Args) > 1 {
 		input := strings.Join(os.Args[1:], " ")
@@ -43,8 +51,11 @@ func main() {
 	reader := bufio.NewReader(os.Stdin)
 	fmt.Printf("\033[35m✨ Gemini REPL Ready (%s)\033[0m\n", state.currentModelName)
 
+	// Mark app as ready for signal-based redraws
+	isReady = true
+
 	for {
-		fmt.Print("\033[36m> \033[0m")
+		printPrompt()
 
 		input, _ := reader.ReadString('\n')
 		input = strings.TrimSpace(input)
@@ -59,6 +70,29 @@ func main() {
 
 		processChat(ctx, input, state)
 	}
+}
+
+// printPrompt centralizes the visual style of the input line
+func printPrompt() {
+	fmt.Print("\033[36m> \033[0m")
+}
+
+// setupSignalHandling ensures that when the user brings the process back to the foreground with "fg", the prompt is
+// reprinted correctly without requiring an Enter keypress.
+func setupSignalHandling(state *AppState) {
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGCONT)
+
+	go func() {
+		for {
+			<-sigs
+			// Only trigger if the main loop has finished its initial setup
+			if isReady {
+				fmt.Print("\n") // Clear any shell artifacts like "[1] + continued"
+				printPrompt()
+			}
+		}
+	}()
 }
 
 // initAppState handles the initial setup of the API client and rendering engine
@@ -105,7 +139,7 @@ func handleCommands(input string, state *AppState) bool {
 		fmt.Println("\033[33mAvailable commands:\033[0m")
 		fmt.Println("\033[36m  clear\033[0m - Clear the conversation history")
 		fmt.Println("\033[36m  copy\033[0m  - Copy the last code block to clipboard")
-		fmt.Println("\033[36m  model [name]\033[0m - Switch to a different model (e.g. 'model gemini-2')")
+		fmt.Println("\033[36m  model [name]\033[0m - Switch to a different model")
 		fmt.Println("\033[36m  exit, quit\033[0m - Exit the REPL")
 		return true
 
@@ -168,22 +202,20 @@ func processChat(ctx context.Context, input string, state *AppState) {
 		}
 	}
 
-	// Extract code block for potential copying later
 	extractLastCode(fullResponse.String(), state)
 
-	// Render the final Markdown to the terminal
 	out, _ := state.renderer.Render(fullResponse.String())
 	fmt.Print(out)
 }
 
-// showLoadingIndicator displays a simple animated "thinking" message while waiting for the model's response
+// showLoadingIndicator displays a simple animated "thinking" message while waiting for the API response
 func showLoadingIndicator(modelName string, stop chan bool) {
 	dots := []string{".  ", ".. ", "..."}
 	i := 0
 	for {
 		select {
 		case <-stop:
-			fmt.Print("\r                           \r") // Clear the line
+			fmt.Print("\r                           \r")
 			return
 		default:
 			fmt.Printf("\r\033[90m%s is thinking%s\033[0m", modelName, dots[i%3])
@@ -193,7 +225,8 @@ func showLoadingIndicator(modelName string, stop chan bool) {
 	}
 }
 
-// extractLastCode uses a regex to find the last Markdown code block in the response and saves it to state for copying
+// extractLastCode uses a regex to find the last Markdown code block in the response and saves it to state for clipboard
+// copying
 func extractLastCode(text string, state *AppState) {
 	re := regexp.MustCompile("(?s)```(?:[a-z]+)?\n(.*?)\n```")
 	matches := re.FindStringSubmatch(text)
