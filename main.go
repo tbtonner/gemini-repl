@@ -34,6 +34,12 @@ func main() {
 	state := initAppState(ctx)
 	defer state.client.Close()
 
+	if len(os.Args) > 1 {
+		input := strings.Join(os.Args[1:], " ")
+		processChat(ctx, input, state)
+		return
+	}
+
 	reader := bufio.NewReader(os.Stdin)
 	fmt.Printf("\033[35m✨ Gemini REPL Ready (%s)\033[0m\n", state.currentModelName)
 
@@ -49,10 +55,6 @@ func main() {
 
 		if handleCommands(input, state) {
 			continue
-		}
-
-		if input == "exit" || input == "quit" {
-			break
 		}
 
 		processChat(ctx, input, state)
@@ -99,6 +101,18 @@ func initAppState(ctx context.Context) *AppState {
 // handleCommands checks for local REPL commands before sending text to the AI
 func handleCommands(input string, state *AppState) bool {
 	switch {
+	case input == "help":
+		fmt.Println("\033[33mAvailable commands:\033[0m")
+		fmt.Println("\033[36m  clear\033[0m - Clear the conversation history")
+		fmt.Println("\033[36m  copy\033[0m  - Copy the last code block to clipboard")
+		fmt.Println("\033[36m  model [name]\033[0m - Switch to a different model (e.g. 'model gemini-2')")
+		fmt.Println("\033[36m  exit, quit\033[0m - Exit the REPL")
+		return true
+
+	case input == "exit", input == "quit":
+		fmt.Println("\033[35m👋 Goodbye!\033[0m")
+		os.Exit(0)
+
 	case input == "clear":
 		fmt.Print("\033[H\033[2J")
 		state.chat = state.model.StartChat()
